@@ -18,7 +18,7 @@ var (
 	namespace  = flag.String("namespace", "default", "Namespace in which konmari run.")
 	age        = flag.Duration("age", 24*time.Hour*30, "Age to judge as old ConfigMap")
 	kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig file with authorization and master location information.")
-	dryrun     = flag.Bool("dryrun", true, "Whether or not delete resource actually.")
+	dryrun     = flag.Bool("dryrun", false, "Whether or not delete resource actually.")
 )
 
 func main() {
@@ -39,8 +39,8 @@ func main() {
 		klog.Fatalln(err)
 	}
 
-	var oldCMs []apiv1.ConfigMap
-	var podList []apiv1.Pod
+	var oldCmItems []apiv1.ConfigMap
+	var podItems []apiv1.Pod
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -49,27 +49,27 @@ func main() {
 		if err != nil {
 			klog.Fatalln(err)
 		}
-		oldCMs = takeOldCMs(*age, cmList.Items)
+		oldCmItems = takeOldCMs(*age, cmList.Items)
 		wg.Done()
 	}()
 
 	wg.Add(1)
 	go func() {
-		pods, err := clientset.CoreV1().Pods(*namespace).List(metav1.ListOptions{})
+		podList, err := clientset.CoreV1().Pods(*namespace).List(metav1.ListOptions{})
 		if err != nil {
 			klog.Fatalln(err)
 		}
-		podList = pods.Items
+		podItems = podList.Items
 		wg.Done()
 	}()
 	wg.Wait()
 
-	deleteUnreferencedCMs(clientset, oldCMs, podList)
+	deleteUnreferencedCMs(clientset, oldCmItems, podItems)
 }
 
-func takeOldCMs(age time.Duration, list []apiv1.ConfigMap) []apiv1.ConfigMap {
+func takeOldCMs(age time.Duration, cmItems []apiv1.ConfigMap) []apiv1.ConfigMap {
 	var ret []apiv1.ConfigMap
-	for _, v := range list {
+	for _, v := range cmItems {
 		t := v.GetObjectMeta().GetCreationTimestamp()
 		if ok := t.Time.Before(time.Now().Add(-age)); ok {
 			ret = append(ret, v)
@@ -79,13 +79,13 @@ func takeOldCMs(age time.Duration, list []apiv1.ConfigMap) []apiv1.ConfigMap {
 	return ret
 }
 
-func takeOrphanCMs(cmList []apiv1.ConfigMap, podList []apiv1.Pod) <-chan apiv1.ConfigMap {
-	ch := make(chan apiv1.ConfigMap, len(cmList))
+func takeOrphanCMs(cmItems []apiv1.ConfigMap, podItems []apiv1.Pod) <-chan apiv1.ConfigMap {
+	ch := make(chan apiv1.ConfigMap, len(cmItems))
 
 	go func() {
 		defer close(ch)
-		for _, cm := range cmList {
-			for _, pod := range podList {
+		for _, cm := range cmItems {
+			for _, pod := range podItems {
 				if referencedBy(&cm, &pod) {
 					break
 				}
@@ -111,9 +111,9 @@ func parseDryRun(dryrun bool) []string {
 	}
 }
 
-func deleteUnreferencedCMs(cli *kubernetes.Clientset, cmList []apiv1.ConfigMap, podList []apiv1.Pod) {
+func deleteUnreferencedCMs(cli *kubernetes.Clientset, cmitems []apiv1.ConfigMap, podItems []apiv1.Pod) {
 	wg := &sync.WaitGroup{}
-	for cm := range takeOrphanCMs(cmList, podList) {
+	for cm := range takeOrphanCMs(cmitems, podItems) {
 		wg.Add(1)
 		go func(name string) {
 			_ = cli.CoreV1().ConfigMaps(*namespace).Delete(name, &metav1.DeleteOptions{
