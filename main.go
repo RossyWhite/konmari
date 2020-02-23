@@ -15,10 +15,10 @@ import (
 )
 
 var (
-	namespace  = flag.String("namespace", "default", "Namespace in which konmari run.")
-	age        = flag.Duration("age", 24*time.Hour*30, "Age to judge as old ConfigMap")
-	kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig file with authorization and master location information.")
-	dryrun     = flag.Bool("dryrun", false, "Whether or not delete resource actually.")
+	namespace    = flag.String("namespace", "default", "Namespace in which konmari run.")
+	deletePeriod = flag.Duration("deletePeriod", 24*time.Hour*30, "Age to judge as old ConfigMap")
+	kubeconfig   = flag.String("kubeconfig", "", "Path to kubeconfig file with authorization and master location information.")
+	dryrun       = flag.Bool("dryrun", false, "Whether or not delete resource actually.")
 )
 
 func main() {
@@ -49,7 +49,7 @@ func main() {
 		if err != nil {
 			klog.Fatalln(err)
 		}
-		oldCmItems = takeOldCMs(*age, cmList.Items)
+		oldCmItems = takeOldCMs(*deletePeriod, cmList.Items)
 		wg.Done()
 	}()
 
@@ -101,7 +101,6 @@ func takeOrphanCMs(cmItems []apiv1.ConfigMap, podItems []apiv1.Pod) <-chan apiv1
 func referencedBy(cm *apiv1.ConfigMap, pod *apiv1.Pod) bool {
 	return strings.Contains(pod.String(), cm.Name)
 }
-
 
 func parseDryRun(dryrun bool) []string {
 	if dryrun {
