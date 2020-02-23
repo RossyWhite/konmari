@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -17,7 +18,7 @@ var (
 	namespace  = flag.String("namespace", "default", "Namespace in which konmari run.")
 	age        = flag.Duration("age", 24*time.Hour*30, "Age to judge as old ConfigMap")
 	kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig file with authorization and master location information.")
-	//dryrun     = flag.Bool("dryrun", false, "Whether or not delete resource actually.")
+	dryrun     = flag.Bool("dryrun", true, "Whether or not delete resource actually.")
 )
 
 func main() {
@@ -38,25 +39,35 @@ func main() {
 		klog.Fatalln(err)
 	}
 
-	cmList, err := clientset.CoreV1().ConfigMaps(*namespace).List(metav1.ListOptions{})
-	if err != nil {
-		klog.Fatalln(err)
-	}
-	oldCMs := takeOlderCMs(*age, cmList.Items)
+	var oldCMs []apiv1.ConfigMap
+	var podList []apiv1.Pod
 
-	podList, err := clientset.CoreV1().Pods(*namespace).List(metav1.ListOptions{})
-	if err != nil {
-		klog.Fatalln(err)
-	}
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		cmList, err := clientset.CoreV1().ConfigMaps(*namespace).List(metav1.ListOptions{})
+		if err != nil {
+			klog.Fatalln(err)
+		}
+		oldCMs = takeOldCMs(*age, cmList.Items)
+		wg.Done()
+	}()
 
-	for cm := range takeOrphanCMs(oldCMs, podList.Items) {
-		_ = clientset.CoreV1().ConfigMaps(*namespace).Delete(cm.Name, &metav1.DeleteOptions{
-			DryRun: []string{metav1.DryRunAll},
-		})
-	}
+	wg.Add(1)
+	go func() {
+		pods, err := clientset.CoreV1().Pods(*namespace).List(metav1.ListOptions{})
+		if err != nil {
+			klog.Fatalln(err)
+		}
+		podList = pods.Items
+		wg.Done()
+	}()
+	wg.Wait()
+
+	deleteUnreferencedCMs(clientset, oldCMs, podList)
 }
 
-func takeOlderCMs(age time.Duration, list []apiv1.ConfigMap) []apiv1.ConfigMap {
+func takeOldCMs(age time.Duration, list []apiv1.ConfigMap) []apiv1.ConfigMap {
 	var ret []apiv1.ConfigMap
 	for _, v := range list {
 		t := v.GetObjectMeta().GetCreationTimestamp()
@@ -72,6 +83,7 @@ func takeOrphanCMs(cmList []apiv1.ConfigMap, podList []apiv1.Pod) <-chan apiv1.C
 	ch := make(chan apiv1.ConfigMap, len(cmList))
 
 	go func() {
+		defer close(ch)
 		for _, cm := range cmList {
 			for _, pod := range podList {
 				if referencedBy(&cm, &pod) {
@@ -90,3 +102,25 @@ func referencedBy(cm *apiv1.ConfigMap, pod *apiv1.Pod) bool {
 	return strings.Contains(pod.String(), cm.Name)
 }
 
+
+func parseDryRun(dryrun bool) []string {
+	if dryrun {
+		return []string{metav1.DryRunAll}
+	} else {
+		return []string{}
+	}
+}
+
+func deleteUnreferencedCMs(cli *kubernetes.Clientset, cmList []apiv1.ConfigMap, podList []apiv1.Pod) {
+	wg := &sync.WaitGroup{}
+	for cm := range takeOrphanCMs(cmList, podList) {
+		wg.Add(1)
+		go func(name string) {
+			_ = cli.CoreV1().ConfigMaps(*namespace).Delete(name, &metav1.DeleteOptions{
+				DryRun: parseDryRun(*dryrun),
+			})
+			wg.Done()
+		}(cm.Name)
+	}
+	wg.Wait()
+}
