@@ -2,87 +2,91 @@ package main
 
 import (
 	"flag"
-	"fmt"
+	"os"
 	"strings"
 	"time"
-
-	//v1 "k8s.io/api/core/v1"
-
-	"os"
-	"path/filepath"
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog"
 )
 
 var (
-	debug = flag.Bool("debug", false, "")
-	ns    = flag.String("n", "default", "")
+	namespace  = flag.String("namespace", "default", "Namespace in which konmari run.")
+	age        = flag.Duration("age", 24*time.Hour*30, "Age to judge as old ConfigMap")
+	kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig file with authorization and master location information.")
+	//dryrun     = flag.Bool("dryrun", false, "Whether or not delete resource actually.")
 )
 
 func main() {
 	flag.Parse()
 
-	var err error
-	var config *rest.Config
-
-	if *debug {
-		home, _ := os.UserHomeDir()
-		config, err = clientcmd.BuildConfigFromFlags("", filepath.Join(home, ".kube", "config"))
-	} else {
-		config, err = rest.InClusterConfig()
+	confpath := os.Getenv("KUBECONFIG")
+	if *kubeconfig != "" {
+		confpath = *kubeconfig
 	}
 
+	config, err := clientcmd.BuildConfigFromFlags("", confpath)
 	if err != nil {
-		panic(err.Error())
+		klog.Fatalln(err)
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		panic(err.Error())
+		klog.Fatalln(err)
 	}
 
-	configMaps, err := clientset.CoreV1().ConfigMaps("default").List(metav1.ListOptions{})
+	cmList, err := clientset.CoreV1().ConfigMaps(*namespace).List(metav1.ListOptions{})
 	if err != nil {
-		panic(err)
+		klog.Fatalln(err)
 	}
+	oldCMs := takeOlderCMs(*age, cmList.Items)
 
-	// old configmaps
-	var oldConfigMaps []apiv1.ConfigMap
-	for _, v := range configMaps.Items {
-		t := v.GetObjectMeta().GetCreationTimestamp()
-		if ok := t.Time.Before(time.Now().Add(-time.Duration(1) * time.Hour)); ok {
-			oldConfigMaps = append(oldConfigMaps, v)
-		}
-	}
-
-	// pods
-	pods, err := clientset.CoreV1().Pods(*ns).List(metav1.ListOptions{})
+	podList, err := clientset.CoreV1().Pods(*namespace).List(metav1.ListOptions{})
 	if err != nil {
-		panic(err)
+		klog.Fatalln(err)
 	}
 
-	for _, cm := range oldConfigMaps {
-		for _, pod := range pods.Items {
-			if configMapReferencedByPod(&pod, &cm) {
-				fmt.Printf("found %s\n", cm.Name)
-				break
-			}
-		}
-		fmt.Printf("not found %s\n", cm.Name)
-		err = clientset.CoreV1().ConfigMaps("default").Delete(cm.Name, &metav1.DeleteOptions{
+	for cm := range takeOrphanCMs(oldCMs, podList.Items) {
+		_ = clientset.CoreV1().ConfigMaps(*namespace).Delete(cm.Name, &metav1.DeleteOptions{
 			DryRun: []string{metav1.DryRunAll},
 		})
-		if err != nil {
-			panic(err)
-		}
 	}
 }
 
+func takeOlderCMs(age time.Duration, list []apiv1.ConfigMap) []apiv1.ConfigMap {
+	var ret []apiv1.ConfigMap
+	for _, v := range list {
+		t := v.GetObjectMeta().GetCreationTimestamp()
+		if ok := t.Time.Before(time.Now().Add(-age)); ok {
+			ret = append(ret, v)
+		}
+	}
 
-func configMapReferencedByPod(pod *apiv1.Pod, cm *apiv1.ConfigMap) bool {
+	return ret
+}
+
+func takeOrphanCMs(cmList []apiv1.ConfigMap, podList []apiv1.Pod) <-chan apiv1.ConfigMap {
+	ch := make(chan apiv1.ConfigMap, len(cmList))
+
+	go func() {
+		for _, cm := range cmList {
+			for _, pod := range podList {
+				if referencedBy(&cm, &pod) {
+					break
+				}
+			}
+			klog.Infof("deletion candidate found: %s", cm.Name)
+			ch <- cm
+		}
+	}()
+
+	return ch
+}
+
+func referencedBy(cm *apiv1.ConfigMap, pod *apiv1.Pod) bool {
 	return strings.Contains(pod.String(), cm.Name)
 }
+
