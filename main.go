@@ -11,7 +11,6 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog"
 )
@@ -34,111 +33,156 @@ type Options struct {
 	DisableConfigMaps bool
 }
 
-type deletable interface {
-
-}
-
-type ConfigMaps struct {
-	cli v1.ConfigMapInterface
-
-}
-
-type Secrets struct {
-	cli v1.SecretInterface
-}
-
 func main() {
 	flag.Parse()
 	opts := createOptions()
 
 	clientset := kubernetes.NewForConfigOrDie(getKubeConfig(opts.Kubeconfig))
 
-	for _, r := range  getDeletableTypes(opts, clientset) {
-		run()
-	}
+	var pods []apiv1.Pod
+	var oldConfigMaps *configMapList
+	var oldSecrets *secretList
 
-
-	var oldCmItems []apiv1.ConfigMap
-	var podItems []apiv1.Pod
-
-	os.Exit(1)
-
-	//cmCli := clientset.CoreV1().ConfigMaps(*namespace)
-	//if !opts.disableSecret {
-	//	secretCli := clientset.CoreV1().Secrets(*namespace)
-	//}
-
-	wg := sync.WaitGroup{}
+	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
-		cmList, err := clientset.CoreV1().ConfigMaps(*namespace).List(metav1.ListOptions{})
-		if err != nil {
-			klog.Fatalln(err)
-		}
-		oldCmItems = takeOldCMs(*deletePeriod, cmList.Items)
-		wg.Done()
-	}()
-
-	wg.Add(1)
-	go func() {
+		defer wg.Done()
 		podList, err := clientset.CoreV1().Pods(*namespace).List(metav1.ListOptions{})
 		if err != nil {
-			klog.Fatalln(err)
+			klog.Fatal(err)
 		}
-		podItems = podList.Items
-		wg.Done()
+		pods = podList.Items
 	}()
+
+	if !opts.DisableConfigMaps {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			l, err := clientset.CoreV1().ConfigMaps(*namespace).List(metav1.ListOptions{})
+			if err != nil {
+				klog.Fatal(err)
+			}
+			cmList := &configMapList{items: l.Items}
+			oldConfigMaps = cmList.GetOnlyCreatedBefore(opts.DeletePeriod)
+		}()
+
+	}
+
+	if !opts.DisableSecret {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			l, err := clientset.CoreV1().Secrets(*namespace).List(metav1.ListOptions{})
+			if err != nil {
+				klog.Fatal(err)
+			}
+			sList := &secretList{items: l.Items}
+			oldSecrets = sList.GetOnlyCreatedBefore(opts.DeletePeriod)
+		}()
+
+	}
+
 	wg.Wait()
 
-	deleteUnreferencedCMs(clientset, oldCmItems, podItems)
+	wg2 := sync.WaitGroup{}
+	if !opts.DisableConfigMaps {
+		for _, r := range oldConfigMaps.GetUnreferencedObjects(pods).items {
+			wg2.Add(1)
+			go func() {
+				defer wg2.Done()
+				err := clientset.CoreV1().ConfigMaps(*namespace).Delete(r.Name, &metav1.DeleteOptions{})
+				if err != nil {
+					klog.Infof("failed to delete %s\n", r.Name)
+				}
+			}()
+		}
+	}
+
+	if !opts.DisableSecret {
+		for _, r := range oldSecrets.GetUnreferencedObjects(pods).items {
+			wg2.Add(1)
+			go func() {
+				defer wg2.Done()
+				err := clientset.CoreV1().Secrets(*namespace).Delete(r.Name, &metav1.DeleteOptions{})
+				if err != nil {
+					klog.Infof("failed to delete %s\n", r.Name)
+				}
+			}()
+		}
+	}
+
+	wg2.Wait()
+
 }
 
-func takeOldCMs(age time.Duration, cmItems []apiv1.ConfigMap) []apiv1.ConfigMap {
+type DeletableResource interface {
+	GetOnlyCreatedBefore(period time.Duration) *DeletableResource
+	GetUnreferencedObjects(pods []apiv1.Pod) *DeletableResource
+}
+
+type configMapList struct {
+	items []apiv1.ConfigMap
+}
+
+func (cmList configMapList) GetOnlyCreatedBefore(period time.Duration) *configMapList {
 	var ret []apiv1.ConfigMap
-	for _, v := range cmItems {
+	for _, v := range cmList.items {
 		t := v.GetObjectMeta().GetCreationTimestamp()
-		if ok := t.Time.Before(time.Now().Add(-age)); ok {
+		if ok := t.Time.Before(time.Now().Add(-period)); ok {
 			ret = append(ret, v)
 		}
 	}
-
-	return ret
+	return &configMapList{items: ret}
 }
 
-func takeOrphanCMs(cmItems []apiv1.ConfigMap, podItems []apiv1.Pod) <-chan apiv1.ConfigMap {
-	ch := make(chan apiv1.ConfigMap, len(cmItems))
-
-	go func() {
-		defer close(ch)
-		for _, cm := range cmItems {
-			for _, pod := range podItems {
-				if referencedBy(&cm, &pod) {
-					break
-				}
+func (cmList configMapList) GetUnreferencedObjects(pods []apiv1.Pod) *configMapList {
+	var items []apiv1.ConfigMap
+	for _, cm := range cmList.items {
+		for _, pod := range pods {
+			if referencedBy(cm.Name, &pod) {
+				break
 			}
-			klog.Infof("deletion candidate found: %s", cm.Name)
-			ch <- cm
 		}
-	}()
-
-	return ch
-}
-
-func referencedBy(cm *apiv1.ConfigMap, pod *apiv1.Pod) bool {
-	return strings.Contains(pod.String(), cm.Name)
-}
-
-func deleteUnreferencedCMs(cli *kubernetes.Clientset, cmitems []apiv1.ConfigMap, podItems []apiv1.Pod) {
-	wg := &sync.WaitGroup{}
-	for cm := range takeOrphanCMs(cmitems, podItems) {
-		wg.Add(1)
-		go func(name string) {
-			_ = cli.CoreV1().ConfigMaps(*namespace).Delete(name, &metav1.DeleteOptions{})
-			wg.Done()
-		}(cm.Name)
+		klog.Infof("deletion candidate found: %s", cm.Name)
+		items = append(items, cm)
 	}
-	wg.Wait()
+	return &configMapList{items: items}
 }
+
+type secretList struct {
+	items []apiv1.Secret
+}
+
+func (sList secretList) GetOnlyCreatedBefore(period time.Duration) *secretList {
+	var ret []apiv1.Secret
+	for _, v := range sList.items {
+		t := v.GetObjectMeta().GetCreationTimestamp()
+		if ok := t.Time.Before(time.Now().Add(-period)); ok {
+			ret = append(ret, v)
+		}
+	}
+	return &secretList{items: ret}
+}
+
+func (sList secretList) GetUnreferencedObjects(pods []apiv1.Pod) *secretList {
+	var items []apiv1.Secret
+	for _, s := range sList.items {
+		for _, pod := range pods {
+			if referencedBy(s.Name, &pod) {
+				break
+			}
+		}
+		klog.Infof("deletion candidate found: %s", s.Name)
+		items = append(items, s)
+	}
+	return &secretList{items: items}
+}
+
+func referencedBy(name string, pod *apiv1.Pod) bool {
+	return strings.Contains(pod.String(), name)
+}
+
+//_ = cli.CoreV1().ConfigMaps(*namespace).Delete(name, &metav1.DeleteOptions{})
 
 func createOptions() *Options {
 	return &Options{
@@ -172,25 +216,4 @@ func getKubeConfig(path string) *rest.Config {
 		klog.Fatalln(err)
 	}
 	return config
-}
-
-func getDeletableTypes(opts *Options, clientset *kubernetes.Clientset) []deletable {
-	var deletables []deletable
-	if !opts.DisableConfigMaps {
-		deletables = append(deletables, &ConfigMaps{
-			cli: clientset.CoreV1().ConfigMaps(opts.Namespace),
-		})
-	}
-
-	if !opts.DisableSecret {
-		deletables = append(deletables, &Secrets{
-			cli: clientset.CoreV1().Secrets(opts.Namespace),
-		})
-	}
-
-	return deletables
-}
-
-func run() {
-
 }
