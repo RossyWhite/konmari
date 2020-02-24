@@ -182,8 +182,6 @@ func referencedBy(name string, pod *apiv1.Pod) bool {
 	return strings.Contains(pod.String(), name)
 }
 
-//_ = cli.CoreV1().ConfigMaps(*namespace).Delete(name, &metav1.DeleteOptions{})
-
 func createOptions() *Options {
 	return &Options{
 		Namespace:         *namespace,
