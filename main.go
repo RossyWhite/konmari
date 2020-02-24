@@ -72,7 +72,9 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			l, err := clientset.CoreV1().Secrets(*namespace).List(metav1.ListOptions{})
+			l, err := clientset.CoreV1().Secrets(*namespace).List(metav1.ListOptions{
+				FieldSelector: "type=Opaque",
+			})
 			if err != nil {
 				klog.Fatal(err)
 			}
@@ -90,7 +92,9 @@ func main() {
 			wg2.Add(1)
 			go func() {
 				defer wg2.Done()
-				err := clientset.CoreV1().ConfigMaps(*namespace).Delete(r.Name, &metav1.DeleteOptions{})
+				err := clientset.CoreV1().ConfigMaps(*namespace).Delete(r.Name, &metav1.DeleteOptions{
+					DryRun: opts.Dryrun,
+				})
 				if err != nil {
 					klog.Infof("failed to delete %s\n", r.Name)
 				}
@@ -103,7 +107,9 @@ func main() {
 			wg2.Add(1)
 			go func() {
 				defer wg2.Done()
-				err := clientset.CoreV1().Secrets(*namespace).Delete(r.Name, &metav1.DeleteOptions{})
+				err := clientset.CoreV1().Secrets(*namespace).Delete(r.Name, &metav1.DeleteOptions{
+					DryRun: opts.Dryrun,
+				})
 				if err != nil {
 					klog.Infof("failed to delete %s\n", r.Name)
 				}
@@ -138,13 +144,10 @@ func (cmList configMapList) GetOnlyCreatedBefore(period time.Duration) *configMa
 func (cmList configMapList) GetUnreferencedObjects(pods []apiv1.Pod) *configMapList {
 	var items []apiv1.ConfigMap
 	for _, cm := range cmList.items {
-		for _, pod := range pods {
-			if referencedBy(cm.Name, &pod) {
-				break
-			}
+		if !referencedBy(cm.Name, pods) {
+			klog.Infof("deletion candidate found: %s", cm.Name)
+			items = append(items, cm)
 		}
-		klog.Infof("deletion candidate found: %s", cm.Name)
-		items = append(items, cm)
 	}
 	return &configMapList{items: items}
 }
@@ -167,19 +170,21 @@ func (sList secretList) GetOnlyCreatedBefore(period time.Duration) *secretList {
 func (sList secretList) GetUnreferencedObjects(pods []apiv1.Pod) *secretList {
 	var items []apiv1.Secret
 	for _, s := range sList.items {
-		for _, pod := range pods {
-			if referencedBy(s.Name, &pod) {
-				break
-			}
+		if !referencedBy(s.Name, pods) {
+			klog.Infof("deletion candidate found: %s", s.Name)
+			items = append(items, s)
 		}
-		klog.Infof("deletion candidate found: %s", s.Name)
-		items = append(items, s)
 	}
 	return &secretList{items: items}
 }
 
-func referencedBy(name string, pod *apiv1.Pod) bool {
-	return strings.Contains(pod.String(), name)
+func referencedBy(name string, pods []apiv1.Pod) bool {
+	for _, pod := range pods {
+		if contain := strings.Contains(pod.String(), name); contain {
+			return true
+		}
+	}
+	return false
 }
 
 func createOptions() *Options {
