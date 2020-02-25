@@ -7,6 +7,8 @@
 `konmari` can be run as a job or cronjob inside of a pod. 
 When it runs, it deletes `ConfigMaps` or `Secrets` that are created before the period of time specified by `deletePeriod`, and are not referenced by any pod.
 
+※ Only `Opaque` type of `Secrets` are subject to delete.
+
 ### Setup RBAC
 
 ```bash
