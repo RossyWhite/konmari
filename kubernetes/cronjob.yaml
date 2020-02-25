@@ -15,7 +15,7 @@ spec:
         spec:
           containers:
             - name: konmari
-              image: rossy4613/konmari:v0.1.0
+              image: rossy4613/konmari:v0.2.0
               command: ["/bin/konmari"]
               args: ["--disableSecrets", "--namespace", "kube-system"]
           restartPolicy: "Never"
