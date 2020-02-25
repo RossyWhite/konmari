@@ -1,0 +1,25 @@
+---
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: konmari-cronjob
+  namespace: kube-system
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: "Forbid"
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          name: konmari-pod
+        spec:
+          containers:
+          - name: konmari
+            image: "" # TODO
+            volumeMounts:
+            - mountPath: /policy-dir
+              name: policy-volume
+            command:
+              - "/bin/konmari"
+          restartPolicy: "Never"
+          serviceAccountName: konmari-sa
