@@ -1,4 +1,4 @@
-# konmari
+# konmari 🧹
 
 `konmari` is a garbage collector to delete `ConfigMaps` and `Secrets` that are no longer referenced by Pods.
 
