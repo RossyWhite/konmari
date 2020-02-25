@@ -20,7 +20,7 @@ var (
 	deletePeriod      = flag.Duration("deletePeriod", 24*time.Hour*30, "Period to judge as old ConfigMap.")
 	kubeconfig        = flag.String("kubeconfig", "", "Path to kubeconfig file with authorization and master location information.")
 	dryrun            = flag.Bool("dryrun", false, "Whether or not to delete resource actually.")
-	disableSecret     = flag.Bool("disableSecret", false, "Whether or not to disable secret.")
+	disableSecrets     = flag.Bool("disableSecrets", false, "Whether or not to disable secret.")
 	disableConfigMaps = flag.Bool("disableConfigMaps", false, "Whether or not to disable ConfigMaps.")
 )
 
@@ -29,7 +29,7 @@ type Options struct {
 	DeletePeriod      time.Duration
 	Kubeconfig        string
 	Dryrun            []string
-	DisableSecret     bool
+	DisableSecrets     bool
 	DisableConfigMaps bool
 }
 
@@ -68,7 +68,7 @@ func main() {
 
 	}
 
-	if !opts.DisableSecret {
+	if !opts.DisableSecrets {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -102,7 +102,7 @@ func main() {
 		}
 	}
 
-	if !opts.DisableSecret {
+	if !opts.DisableSecrets {
 		for _, r := range oldSecrets.GetUnreferencedObjects(pods).items {
 			wg2.Add(1)
 			go func() {
@@ -193,7 +193,7 @@ func createOptions() *Options {
 		DeletePeriod:      *deletePeriod,
 		Kubeconfig:        parseKubeconfigFlag(*kubeconfig),
 		Dryrun:            parseDryRunFlag(*dryrun),
-		DisableSecret:     *disableSecret,
+		DisableSecrets:     *disableSecrets,
 		DisableConfigMaps: *disableConfigMaps,
 	}
 }
