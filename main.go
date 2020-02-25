@@ -1,27 +1,27 @@
 package main
 
 import (
-	"flag"
-	"k8s.io/client-go/rest"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	flag "github.com/spf13/pflag"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog"
 )
 
 var (
 	namespace         = flag.String("namespace", "default", "Namespace in which konmari run.")
-	deletePeriod      = flag.Duration("deletePeriod", 24*time.Hour*30, "Period to judge as old ConfigMap.")
+	deletePeriod      = flag.Duration("deletePeriod", 24*time.Hour*30, "Period to judge as old Object.")
 	kubeconfig        = flag.String("kubeconfig", "", "Path to kubeconfig file with authorization and master location information.")
-	dryrun            = flag.Bool("dryrun", false, "Whether or not to delete resource actually.")
-	disableSecrets     = flag.Bool("disableSecrets", false, "Whether or not to disable secret.")
-	disableConfigMaps = flag.Bool("disableConfigMaps", false, "Whether or not to disable ConfigMaps.")
+	dryrun            = flag.Bool("dryrun", false, "Whether or not to actually delete Objects.")
+	disableSecrets    = flag.Bool("disableSecrets", false, "Whether or not to ignore Secrets.")
+	disableConfigMaps = flag.Bool("disableConfigMaps", false, "Whether or not to ignore ConfigMaps.")
 )
 
 type Options struct {
@@ -29,7 +29,7 @@ type Options struct {
 	DeletePeriod      time.Duration
 	Kubeconfig        string
 	Dryrun            []string
-	DisableSecrets     bool
+	DisableSecrets    bool
 	DisableConfigMaps bool
 }
 
@@ -198,7 +198,7 @@ func createOptions() *Options {
 		DeletePeriod:      *deletePeriod,
 		Kubeconfig:        parseKubeconfigFlag(*kubeconfig),
 		Dryrun:            parseDryRunFlag(*dryrun),
-		DisableSecrets:     *disableSecrets,
+		DisableSecrets:    *disableSecrets,
 		DisableConfigMaps: *disableConfigMaps,
 	}
 }

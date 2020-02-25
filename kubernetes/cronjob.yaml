@@ -14,9 +14,9 @@ spec:
           name: konmari-pod
         spec:
           containers:
-          - name: konmari
-            image: rossy4613/konmari:v0.1.0
-            command:
-              - "/bin/konmari"
+            - name: konmari
+              image: rossy4613/konmari:v0.1.0
+              command: ["/bin/konmari"]
+              args: ["--disableSecrets", "--namespace", "kube-system"]
           restartPolicy: "Never"
           serviceAccountName: konmari-sa
