@@ -34,10 +34,15 @@ type Options struct {
 }
 
 func main() {
+	klog.InitFlags(nil)
+
 	flag.Parse()
 	opts := createOptions()
 
-	clientset := kubernetes.NewForConfigOrDie(getKubeConfig(opts.Kubeconfig))
+	clientset, err := kubernetes.NewForConfig(getKubeConfig(opts.Kubeconfig))
+	if err != nil {
+		klog.Fatalln(err)
+	}
 
 	var pods []apiv1.Pod
 	var oldConfigMaps *configMapList
@@ -96,7 +101,7 @@ func main() {
 					DryRun: opts.Dryrun,
 				})
 				if err != nil {
-					klog.Infof("failed to delete %s\n", r.Name)
+					klog.Errorf("failed to delete %s\n", r.Name)
 				}
 			}()
 		}
@@ -111,7 +116,7 @@ func main() {
 					DryRun: opts.Dryrun,
 				})
 				if err != nil {
-					klog.Infof("failed to delete %s\n", r.Name)
+					klog.Errorf("failed to delete %s\n", r.Name)
 				}
 			}()
 		}
@@ -145,7 +150,7 @@ func (cmList configMapList) GetUnreferencedObjects(pods []apiv1.Pod) *configMapL
 	var items []apiv1.ConfigMap
 	for _, cm := range cmList.items {
 		if !referencedBy(cm.Name, pods) {
-			klog.Infof("deletion candidate found: %s", cm.Name)
+			klog.V(2).Infof("deletion candidate found: %s", cm.Name)
 			items = append(items, cm)
 		}
 	}
@@ -171,7 +176,7 @@ func (sList secretList) GetUnreferencedObjects(pods []apiv1.Pod) *secretList {
 	var items []apiv1.Secret
 	for _, s := range sList.items {
 		if !referencedBy(s.Name, pods) {
-			klog.Infof("deletion candidate found: %s", s.Name)
+			klog.V(2).Infof("deletion candidate found: %s", s.Name)
 			items = append(items, s)
 		}
 	}

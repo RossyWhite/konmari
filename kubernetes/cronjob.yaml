@@ -5,7 +5,7 @@ metadata:
   name: konmari-cronjob
   namespace: kube-system
 spec:
-  schedule: "0 0 1 * ? *"
+  schedule: "0 0 1 * *"
   concurrencyPolicy: "Forbid"
   jobTemplate:
     spec:
@@ -16,9 +16,6 @@ spec:
           containers:
           - name: konmari
             image: rossy4613/konmari:v0.1.0
-            volumeMounts:
-            - mountPath: /policy-dir
-              name: policy-volume
             command:
               - "/bin/konmari"
           restartPolicy: "Never"
